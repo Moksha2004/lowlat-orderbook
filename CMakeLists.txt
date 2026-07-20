@@ -18,7 +18,12 @@ add_library(orderbook INTERFACE)                 # header-only for now; add src/
 target_include_directories(orderbook INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 enable_testing()
+include(GoogleTest)
+
 add_executable(test_types tests/test_types.cpp)
 target_link_libraries(test_types PRIVATE orderbook GTest::gtest_main)
-include(GoogleTest)
 gtest_discover_tests(test_types)
+
+add_executable(test_price_level tests/test_price_level.cpp)
+target_link_libraries(test_price_level PRIVATE orderbook GTest::gtest_main)
+gtest_discover_tests(test_price_level)
