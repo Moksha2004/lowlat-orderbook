@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <compare>
 #include <type_traits>
+#include <functional>   // std::hash specialization below
 
 struct Price {
     int64_t v;
@@ -53,3 +54,23 @@ static_assert(sizeof(Order) <= 64, "Order must fit one cache line");
 // Only legal while Order is trivially destructible — this turns a silent
 // leak (someone adds a std::string field) into a loud compile error.
 static_assert(std::is_trivially_destructible_v<Order>);
+
+// Snapshot of best bid/ask — returned by OrderBook::top_of_book().
+struct TopOfBook {
+    bool     has_bid{false};
+    Price    best_bid{0};
+    uint64_t bid_qty{0};
+
+    bool     has_ask{false};
+    Price    best_ask{0};
+    uint64_t ask_qty{0};
+};
+
+// Let std::unordered_map<OrderID, ...> hash our strong typedef by delegating
+// to the built-in uint64_t hasher. Same pattern for any strong-typedef key.
+template <>
+struct std::hash<OrderID> {
+    size_t operator()(const OrderID& k) const noexcept {
+        return std::hash<uint64_t>{}(k.v);
+    }
+};
