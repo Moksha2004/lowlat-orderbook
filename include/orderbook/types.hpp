@@ -55,6 +55,14 @@ static_assert(sizeof(Order) <= 64, "Order must fit one cache line");
 // leak (someone adds a std::string field) into a loud compile error.
 static_assert(std::is_trivially_destructible_v<Order>);
 
+// One fill produced by matching. Trade always prints at the RESTING price.
+struct Execution {
+    OrderID aggressor;
+    OrderID resting;
+    Price   price;
+    Qty     qty;
+};
+
 // Snapshot of best bid/ask — returned by OrderBook::top_of_book().
 struct TopOfBook {
     bool     has_bid{false};

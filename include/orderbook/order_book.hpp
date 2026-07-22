@@ -4,30 +4,66 @@
 #include <map>
 #include <unordered_map>
 #include <deque>
+#include <vector>
+#include <algorithm>
 #include <functional>
 
-// Single-symbol limit order book. No matching yet (Day 5) — this stage just
-// stores resting orders and answers top_of_book / cancel.
-//
-// Implementations are in-class (implicitly inline): add/cancel are hot-path,
-// and the `orderbook` CMake target is header-only, so there is no .cpp to
-// compile into.
+// Single-symbol limit order book with price-time priority matching.
+// Implementations in-class (inline): hot path, and the CMake target is
+// header-only.
 class OrderBook {
-    // Bids: highest price first. Asks: lowest price first (map default).
-    std::map<Price, PriceLevel, std::greater<Price>> bids_;
-    std::map<Price, PriceLevel>                      asks_;
+    std::map<Price, PriceLevel, std::greater<Price>> bids_;   // highest first
+    std::map<Price, PriceLevel>                      asks_;   // lowest first
+    std::unordered_map<OrderID, Order*>              index_;
+    std::deque<Order>                                storage_;
+    uint64_t                                         next_id_{1};
 
-    std::unordered_map<OrderID, Order*> index_;   // OrderID -> Order*, O(1) cancel
-    std::deque<Order>                   storage_; // owns Orders; stable addresses
-    uint64_t                            next_id_{1};
+    // Walk the opposing book best-price-first, filling until the incoming order
+    // is exhausted or can no longer cross. Mutates incoming.qty down.
+    // STP is intentionally OFF here — self-trades allowed until Day 13.
+    template <class OppMap, class Crosses>
+    std::vector<Execution> match_side(Order& incoming, OppMap& opp, Crosses crosses) {
+        std::vector<Execution> fills;
+        auto it = opp.begin();
+        while (incoming.qty.v > 0 && it != opp.end() && crosses(incoming.price, it->first)) {
+            PriceLevel& level = it->second;
+            while (incoming.qty.v > 0 && !level.empty()) {
+                Order* resting = level.front();
+                uint32_t fill_qty = std::min(incoming.qty.v, resting->qty.v);
+
+                fills.push_back(Execution{
+                    .aggressor = incoming.id,
+                    .resting   = resting->id,
+                    .price     = resting->price,   // trade at the resting price
+                    .qty       = Qty{fill_qty}
+                });
+
+                // Zero-out BEFORE remove() so remove() subtracts 0, not the
+                // pre-fill qty (avoids double-counting total_qty_).
+                incoming.qty.v -= fill_qty;
+                resting->qty.v -= fill_qty;
+                level.reduce_total_qty(fill_qty);
+
+                if (resting->qty.v == 0) {
+                    level.remove(resting);
+                    index_.erase(resting->id);
+                }
+            }
+            it = level.empty() ? opp.erase(it) : std::next(it);
+        }
+        return fills;
+    }
 
 public:
-    OrderID add_order(Side side, Price price, Qty qty, ParticipantID participant) {
-        OrderID id{next_id_++};
+    struct AddResult {
+        OrderID id;
+        std::vector<Execution> fills;
+    };
 
-        // Construct in stable storage (deque never relocates existing elements,
-        // unlike vector — the index_ pointers must stay valid).
-        storage_.push_back(Order{
+    AddResult add_order(Side side, Price price, Qty qty,
+                        ParticipantID participant = ParticipantID{0}) {
+        OrderID id{next_id_++};
+        Order incoming{
             .next = nullptr,
             .prev = nullptr,
             .price = price,
@@ -35,17 +71,25 @@ public:
             .qty = qty,
             .participant_id = participant,
             .side = side
-        });
-        Order* o = &storage_.back();
+        };
 
-        // operator[] creates the PriceLevel if this price is new.
-        if (side == Side::Buy) {
-            bids_[price].push_back(o);
-        } else {
-            asks_[price].push_back(o);
+        std::vector<Execution> fills =
+            (side == Side::Buy)
+              ? match_side(incoming, asks_, [](Price p, Price ask) { return p >= ask; })
+              : match_side(incoming, bids_, [](Price p, Price bid) { return p <= bid; });
+
+        // Whatever didn't fill rests.
+        if (incoming.qty.v > 0) {
+            storage_.push_back(incoming);
+            Order* o = &storage_.back();
+            if (side == Side::Buy) {
+                bids_[price].push_back(o);
+            } else {
+                asks_[price].push_back(o);
+            }
+            index_[id] = o;
         }
-        index_[id] = o;
-        return id;
+        return {id, std::move(fills)};
     }
 
     bool cancel_order(OrderID id) {
@@ -54,25 +98,17 @@ public:
             return false;
         }
         Order* o = it->second;
-
-        // Order carries its own side + price, so we route in O(1).
         if (o->side == Side::Buy) {
             auto lvl = bids_.find(o->price);
             lvl->second.remove(o);
-            if (lvl->second.empty()) {
-                bids_.erase(lvl);   // don't leave empty price levels behind
-            }
+            if (lvl->second.empty()) bids_.erase(lvl);
         } else {
             auto lvl = asks_.find(o->price);
             lvl->second.remove(o);
-            if (lvl->second.empty()) {
-                asks_.erase(lvl);
-            }
+            if (lvl->second.empty()) asks_.erase(lvl);
         }
         index_.erase(it);
         return true;
-        // NOTE (limitation): the Order stays in storage_ — deque grows for the
-        // book's lifetime. Acceptable now; the Day-5 arena reclaims slots.
     }
 
     TopOfBook top_of_book() const {

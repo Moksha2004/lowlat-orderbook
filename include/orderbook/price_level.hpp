@@ -1,6 +1,7 @@
 #pragma once
 #include "orderbook/types.hpp"
 #include <cstdint>
+#include <cassert>
 
 // One price level = FIFO queue of resting orders at a single price.
 // Intrusive: Orders ARE the nodes (Order::prev/next). This class never
@@ -56,6 +57,14 @@ public:
         // becomes a use-after-free when the arena recycles this slot.
         o->prev = nullptr;
         o->next = nullptr;
+    }
+
+    // Partial fill: the resting order stays in the level but its qty dropped,
+    // so the level's cached total must drop too. (A full fill instead calls
+    // remove(), which subtracts the order's remaining qty — 0 after zeroing.)
+    void reduce_total_qty(uint64_t fill_qty) {
+        assert(total_qty_ >= fill_qty && "underflow: fill_qty exceeds total_qty_");
+        total_qty_ -= fill_qty;
     }
 
     Order*   front()     const { return head_; }
