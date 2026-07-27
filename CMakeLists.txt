@@ -31,3 +31,7 @@ gtest_discover_tests(test_price_level)
 add_executable(test_order_book tests/test_order_book.cpp)
 target_link_libraries(test_order_book PRIVATE orderbook GTest::gtest_main)
 gtest_discover_tests(test_order_book)
+
+add_executable(test_arena tests/test_arena.cpp)
+target_link_libraries(test_arena PRIVATE orderbook GTest::gtest_main)
+gtest_discover_tests(test_arena)

@@ -4,26 +4,33 @@
 #include <type_traits>
 #include <functional>   // std::hash specialization below
 
+// Each strong typedef has a zero default ctor (needed so Order is
+// default-constructible → the arena's std::vector<Order> can value-init a pool)
+// AND an explicit value ctor (blocks implicit conversions + arg-swap bugs).
 struct Price {
     int64_t v;
+    constexpr Price() noexcept : v(0) {}
     constexpr explicit Price(int64_t x) : v(x) {}
     auto operator<=>(const Price&) const = default;
 };
 
 struct Qty {
     uint32_t v;
+    constexpr Qty() noexcept : v(0) {}
     constexpr explicit Qty(uint32_t x) : v(x) {}
     auto operator<=>(const Qty&) const = default;
 };
 
 struct OrderID {
     uint64_t v;
+    constexpr OrderID() noexcept : v(0) {}
     constexpr explicit OrderID(uint64_t x) : v(x) {}
     auto operator<=>(const OrderID&) const = default;
 };
 
 struct ParticipantID {
     uint32_t v;
+    constexpr ParticipantID() noexcept : v(0) {}
     constexpr explicit ParticipantID(uint32_t x) : v(x) {}
     auto operator<=>(const ParticipantID&) const = default;
 };
