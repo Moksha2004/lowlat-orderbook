@@ -3,3 +3,5 @@ data/*.bin
 *.o
 .cache/
 compile_commands.json
+bench/libshim.so
+bench/bench_arena

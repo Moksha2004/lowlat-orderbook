@@ -1,9 +1,9 @@
 #pragma once
 #include "orderbook/types.hpp"
 #include "orderbook/price_level.hpp"
+#include "orderbook/arena_allocator.hpp"
 #include <map>
 #include <unordered_map>
-#include <deque>
 #include <vector>
 #include <algorithm>
 #include <functional>
@@ -15,7 +15,7 @@ class OrderBook {
     std::map<Price, PriceLevel, std::greater<Price>> bids_;   // highest first
     std::map<Price, PriceLevel>                      asks_;   // lowest first
     std::unordered_map<OrderID, Order*>              index_;
-    std::deque<Order>                                storage_;
+    OrderArena                                       arena_{1'000'000}; // Orders live here
     uint64_t                                         next_id_{1};
 
     // Walk the opposing book best-price-first, filling until the incoming order
@@ -47,6 +47,7 @@ class OrderBook {
                 if (resting->qty.v == 0) {
                     level.remove(resting);
                     index_.erase(resting->id);
+                    arena_.free(resting);   // recycle the filled slot
                 }
             }
             it = level.empty() ? opp.erase(it) : std::next(it);
@@ -55,9 +56,14 @@ class OrderBook {
     }
 
 public:
+    // RestRejected: the residual could not rest because the arena is full.
+    // Any fills in `fills` still executed — only the leftover is dropped.
+    enum class Status { Filled, Rested, RestRejected };
+
     struct AddResult {
         OrderID id;
         std::vector<Execution> fills;
+        Status status;
     };
 
     AddResult add_order(Side side, Price price, Qty qty,
@@ -78,18 +84,23 @@ public:
               ? match_side(incoming, asks_, [](Price p, Price ask) { return p >= ask; })
               : match_side(incoming, bids_, [](Price p, Price bid) { return p <= bid; });
 
-        // Whatever didn't fill rests.
-        if (incoming.qty.v > 0) {
-            storage_.push_back(incoming);
-            Order* o = &storage_.back();
-            if (side == Side::Buy) {
-                bids_[price].push_back(o);
-            } else {
-                asks_[price].push_back(o);
-            }
-            index_[id] = o;
+        if (incoming.qty.v == 0) {
+            return {id, std::move(fills), Status::Filled};
         }
-        return {id, std::move(fills)};
+
+        // Residual rests — take a slot from the arena.
+        Order* o = arena_.allocate();
+        if (!o) [[unlikely]] {
+            return {id, std::move(fills), Status::RestRejected};
+        }
+        *o = incoming;                 // copy fields into the pooled slot
+        if (side == Side::Buy) {
+            bids_[price].push_back(o);
+        } else {
+            asks_[price].push_back(o);
+        }
+        index_[id] = o;
+        return {id, std::move(fills), Status::Rested};
     }
 
     bool cancel_order(OrderID id) {
@@ -108,6 +119,7 @@ public:
             if (lvl->second.empty()) asks_.erase(lvl);
         }
         index_.erase(it);
+        arena_.free(o);   // recycle the cancelled slot
         return true;
     }
 
